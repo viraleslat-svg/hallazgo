@@ -15,8 +15,13 @@ Crear una carpeta `posts/AAAA-MM-DD-nombre-corto/` con:
 
 - `01.jpg`, `02.jpg`, … (entre 2 y 10 imágenes JPEG, 1080×1350)
 - `caption.txt` con el texto completo (máximo 2200 caracteres)
+- `historia.jpg` (opcional, 1080×1920): se publica como historia justo después del post
 
-La fecha del nombre es el día en que se publica.
+La fecha del nombre es el día en que se publica. Las imágenes se generan con
+`node build.js contenido/AAAA-MM-DD.js` en la carpeta "4. Sistema (no tocar)".
+
+La API de Instagram no permite stickers de encuesta ni de pregunta en las historias,
+así que la historia invita a responder por mensaje directo.
 
 ## Probar sin publicar
 

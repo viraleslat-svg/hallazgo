@@ -35,6 +35,8 @@ jobs:
           node scripts/publicar.mjs
 
       - name: Guardar registro de lo publicado
+        # Corre aunque falle la historia: el post ya salió y hay que anotarlo para no repetirlo.
+        if: always()
         run: |
           if [ -n "$(git status --porcelain posts)" ]; then
             git config user.name "github-actions[bot]"

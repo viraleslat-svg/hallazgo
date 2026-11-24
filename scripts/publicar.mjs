@@ -5,7 +5,8 @@
 //   probar   → valida el token y que Instagram pueda leer las imágenes del próximo post. NO publica.
 //   publicar → publica el post pendiente más antiguo cuya fecha (hora de Argentina) ya llegó.
 //
-// Cola: cada carpeta posts/AAAA-MM-DD-nombre/ con 01.jpg, 02.jpg, ... y caption.txt.
+// Cola: cada carpeta posts/AAAA-MM-DD-nombre/ con 01.jpg, 02.jpg, ..., caption.txt
+// y, opcional, historia.jpg (se publica como historia justo después del post).
 // Al publicar se crea publicado.json dentro de la carpeta, así no se repite.
 
 import { readdir, readFile, writeFile, access } from 'node:fs/promises';
@@ -74,28 +75,52 @@ async function cargarPost(dir) {
   if (caption.length > 2200) fail(`${dir}: el texto tiene ${caption.length} caracteres (máximo 2200).`);
   const hashtags = (caption.match(/#[\p{L}\p{N}_]+/gu) || []).length;
   if (hashtags > 30) fail(`${dir}: tiene ${hashtags} hashtags (máximo 30).`);
-  const urls = files.map((f) => `https://raw.githubusercontent.com/${REPO}/${SHA}/posts/${encodeURIComponent(dir)}/${f}`);
-  return { dir, full, files, caption, urls };
+  const url = (f) => `https://raw.githubusercontent.com/${REPO}/${SHA}/posts/${encodeURIComponent(dir)}/${f}`;
+  const urls = files.map(url);
+  // historia.jpg (1080x1920) es opcional: si está, se publica como historia junto con el post.
+  const historia = (await existe(path.join(full, 'historia.jpg'))) ? url('historia.jpg') : null;
+  return { dir, full, files, caption, urls, historia };
 }
 
 async function verificarUrls(post) {
-  for (const u of post.urls) {
+  for (const u of [...post.urls, ...(post.historia ? [post.historia] : [])]) {
     const r = await fetch(u, { method: 'HEAD' });
     const tipo = r.headers.get('content-type') || '';
     if (!r.ok) fail(`No se puede descargar ${u} (HTTP ${r.status}). ¿El repositorio es público?`);
     if (!tipo.startsWith('image/jpeg')) fail(`${u} se sirve como "${tipo}"; Instagram necesita image/jpeg.`);
   }
-  console.log(`  ✓ las ${post.urls.length} imágenes se pueden descargar`);
+  console.log(`  ✓ las ${post.urls.length + (post.historia ? 1 : 0)} imágenes se pueden descargar`);
 }
 
 async function esperarContenedor(id, nombre) {
   for (let i = 0; i < 40; i++) {
     const { status_code: estado, status } = await api('GET', id, { fields: 'status_code,status' });
     if (estado === 'FINISHED') return;
-    if (estado === 'ERROR' || estado === 'EXPIRED') fail(`Instagram rechazó ${nombre}: ${status || estado}`);
+    if (estado === 'ERROR' || estado === 'EXPIRED') throw new Error(`Instagram rechazó ${nombre}: ${status || estado}`);
     await sleep(5000);
   }
-  fail(`${nombre} no terminó de procesarse a tiempo.`);
+  throw new Error(`${nombre} no terminó de procesarse a tiempo.`);
+}
+
+async function crearHistoria(igId, post) {
+  const { id } = await api('POST', `${igId}/media`, { image_url: post.historia, media_type: 'STORIES' });
+  await esperarContenedor(id, 'la historia');
+  return id;
+}
+
+// La historia sale después del post. Si falla, el post igual queda publicado y marcado;
+// el error hace fallar la ejecución para que GitHub mande el aviso por email.
+async function publicarHistoria(igId, post) {
+  try {
+    const contenedor = await crearHistoria(igId, post);
+    const { id } = await api('POST', `${igId}/media_publish`, { creation_id: contenedor });
+    const registro = JSON.parse(await readFile(path.join(post.full, 'publicado.json'), 'utf8'));
+    await writeFile(path.join(post.full, 'publicado.json'), `${JSON.stringify({ ...registro, historia: id }, null, 2)}\n`);
+    console.log('HISTORIA PUBLICADA');
+  } catch (e) {
+    console.log(`::error::El post se publicó, pero la historia falló: ${e.message}`);
+    process.exitCode = 1;
+  }
 }
 
 async function crearItems(igId, post) {
@@ -174,6 +199,12 @@ async function main() {
       console.log(`Probando con el próximo post: ${post.dir} (${post.files.length} imágenes)`);
       await verificarUrls(post);
       await crearItems(igId, post);
+      if (post.historia) {
+        await crearHistoria(igId, post);
+        console.log('  ✓ historia aceptada por Instagram');
+      } else {
+        console.log('  (este post no tiene historia.jpg)');
+      }
       console.log('PRUEBA OK: el token funciona e Instagram puede leer las imágenes. No se publicó nada.');
       console.log(`Cola pendiente: ${cola.join(', ')}`);
     }
@@ -210,6 +241,7 @@ async function main() {
   const { permalink, timestamp } = await api('GET', mediaId, { fields: 'permalink,timestamp' });
   console.log(`PUBLICADO: ${permalink}`);
   await marcar(post, mediaId, permalink, timestamp);
+  if (post.historia) await publicarHistoria(igId, post);
   await renovarToken();
 }
 
