@@ -1,5 +1,5 @@
-// Publica en Instagram el carrusel que toca, con la API oficial
-// (Instagram API con inicio de sesión de Instagram). Corre dentro de GitHub Actions.
+// Publica en Instagram el carrusel que toca, con la API oficial de Meta.
+// Corre dentro de GitHub Actions.
 //
 // Modos (variable MODO):
 //   probar   → valida el token y que Instagram pueda leer las imágenes del próximo post. NO publica.
@@ -11,7 +11,13 @@
 import { readdir, readFile, writeFile, access } from 'node:fs/promises';
 import path from 'node:path';
 
-const API = 'https://graph.instagram.com';
+// Sirve con los dos tipos de token de Meta:
+//  - token de Instagram (inicio de sesión con Instagram)      → graph.instagram.com, vence a los 60 días
+//  - token de usuario del sistema (inicio de sesión unificado) → graph.facebook.com, no vence
+const API_IG = 'https://graph.instagram.com';
+const API_FB = 'https://graph.facebook.com';
+let API = API_IG;
+const IG_ID = (process.env.IG_ID || '17841423521488647').trim(); // id de @hallazgo.lat
 const TOKEN = (process.env.IG_TOKEN || '').trim();
 const MODO = (process.env.MODO || 'probar').trim();
 const REPO = process.env.GITHUB_REPOSITORY; // usuario/repositorio
@@ -113,8 +119,12 @@ async function marcar(post, id, permalink, timestamp) {
   await writeFile(path.join(post.full, 'publicado.json'), `${JSON.stringify(registro, null, 2)}\n`);
 }
 
-// Los tokens de larga duración vencen a los 60 días; renovarlo seguido los mantiene vivos.
+// Los tokens de Instagram vencen a los 60 días; renovarlo seguido los mantiene vivos.
 async function renovarToken() {
+  if (API === API_FB) {
+    console.log('Token: es de usuario del sistema, no vence.');
+    return;
+  }
   try {
     const r = await fetch(`${API}/refresh_access_token?grant_type=ig_refresh_token&access_token=${encodeURIComponent(TOKEN)}`);
     const d = await r.json().catch(() => ({}));
@@ -130,12 +140,30 @@ async function renovarToken() {
   }
 }
 
+// Prueba primero como token de Instagram y, si no, como token de usuario del sistema.
+async function conectar() {
+  let errorIg;
+  try {
+    const me = await api('GET', 'me', { fields: 'user_id,username,account_type' });
+    console.log(`Cuenta conectada: @${me.username} (${me.account_type || 'tipo desconocido'}) · API de Instagram`);
+    return { igId: me.user_id, username: me.username };
+  } catch (e) {
+    errorIg = e.message;
+  }
+  API = API_FB;
+  try {
+    const cuenta = await api('GET', IG_ID, { fields: 'id,username' });
+    console.log(`Cuenta conectada: @${cuenta.username} · API de Facebook (usuario del sistema)`);
+    return { igId: cuenta.id, username: cuenta.username };
+  } catch (e) {
+    fail(`El token no sirvió con ninguna de las dos APIs.\n  Instagram: ${errorIg}\n  Facebook: ${e.message}`);
+  }
+}
+
 async function main() {
   console.log(`Modo: ${MODO} · Fecha en Argentina: ${hoy()}`);
-  const me = await api('GET', 'me', { fields: 'user_id,username,account_type' });
-  console.log(`Cuenta conectada: @${me.username} (${me.account_type || 'tipo desconocido'})`);
-  if (me.username !== USUARIO_ESPERADO) fail(`El token es de @${me.username}, se esperaba @${USUARIO_ESPERADO}.`);
-  const igId = me.user_id;
+  const { igId, username } = await conectar();
+  if (username !== USUARIO_ESPERADO) fail(`El token es de @${username}, se esperaba @${USUARIO_ESPERADO}.`);
   const cola = await pendientes();
 
   if (MODO === 'probar') {

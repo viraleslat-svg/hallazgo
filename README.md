@@ -26,5 +26,6 @@ Verifica el token y que Instagram pueda leer las imágenes del próximo post, si
 ## El token
 
 - Está guardado como secreto `IG_TOKEN` (Settings → Secrets and variables → Actions). Nunca va en el código.
-- Vence a los 60 días, pero el script lo renueva en cada ejecución. Si el registro muestra un aviso
-  de "token nuevo", hay que generar uno y reemplazar el secreto.
+- Sirve un token de usuario del sistema (app de Meta "Hallazgo Publicador", inicio de sesión unificado),
+  que no vence, o un token de Instagram, que vence a los 60 días y el script renueva en cada ejecución.
+  Si el registro muestra un aviso de "token nuevo", hay que generar uno y reemplazar el secreto.
