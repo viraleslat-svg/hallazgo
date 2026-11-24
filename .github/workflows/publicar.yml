@@ -1,0 +1,45 @@
+name: Publicar en Instagram
+
+on:
+  schedule:
+    # Todos los días a las 01:17 UTC = 22:17 en Argentina (19:17 en México, 20:17 en Colombia).
+    - cron: '17 1 * * *'
+  workflow_dispatch:
+    inputs:
+      modo:
+        description: 'probar = valida token e imágenes sin publicar · publicar = publica el post que toca hoy'
+        type: choice
+        options: [probar, publicar]
+        default: probar
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publicar-instagram
+  cancel-in-progress: false
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Publicar
+        env:
+          IG_TOKEN: ${{ secrets.IG_TOKEN }}
+          MODO: ${{ github.event_name == 'schedule' && 'publicar' || inputs.modo }}
+        run: |
+          node --version
+          node scripts/publicar.mjs
+
+      - name: Guardar registro de lo publicado
+        run: |
+          if [ -n "$(git status --porcelain posts)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add posts
+            git commit -m "Publicado en Instagram: $(git status --porcelain posts | head -n1 | awk '{print $2}' | cut -d/ -f2)"
+            git push
+          fi
