@@ -2,12 +2,15 @@
 // Corre dentro de GitHub Actions.
 //
 // Modos (variable MODO):
-//   probar   → valida el token y que Instagram pueda leer las imágenes del próximo post. NO publica.
+//   probar   → valida el token y que Instagram acepte el próximo post (y su historia y su reel). NO publica.
 //   publicar → publica el post pendiente más antiguo cuya fecha (hora de Argentina) ya llegó.
+//   reel     → publica el reel pendiente más antiguo cuya fecha ya llegó (corre al mediodía).
 //
 // Cola: cada carpeta posts/AAAA-MM-DD-nombre/ con 01.jpg, 02.jpg, ..., caption.txt
-// y, opcional, historia.jpg (se publica como historia justo después del post).
-// Al publicar se crea publicado.json dentro de la carpeta, así no se repite.
+// y, opcionales:
+//   historia.jpg → se publica como historia justo después del post.
+//   reel.mp4 (+ reel-portada.jpg y reel-caption.txt) → se publica como reel en el modo "reel".
+// Al publicar se crea publicado.json (o reel-publicado.json) dentro de la carpeta, así no se repite.
 
 import { readdir, readFile, writeFile, access } from 'node:fs/promises';
 import path from 'node:path';
@@ -33,7 +36,7 @@ function fail(msg) {
 }
 
 if (!TOKEN) fail('Falta el secreto IG_TOKEN (GitHub → Settings → Secrets and variables → Actions).');
-if (!['probar', 'publicar'].includes(MODO)) fail(`MODO desconocido: "${MODO}" (usa "probar" o "publicar").`);
+if (!['probar', 'publicar', 'reel'].includes(MODO)) fail(`MODO desconocido: "${MODO}" (usa "probar", "publicar" o "reel").`);
 if (!REPO || !SHA) fail('Este script está pensado para correr en GitHub Actions (faltan GITHUB_REPOSITORY / GITHUB_SHA).');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -92,14 +95,85 @@ async function verificarUrls(post) {
   console.log(`  ✓ las ${post.urls.length + (post.historia ? 1 : 0)} imágenes se pueden descargar`);
 }
 
-async function esperarContenedor(id, nombre) {
-  for (let i = 0; i < 40; i++) {
+async function esperarContenedor(id, nombre, intentos = 40, pausa = 5000) {
+  for (let i = 0; i < intentos; i++) {
     const { status_code: estado, status } = await api('GET', id, { fields: 'status_code,status' });
     if (estado === 'FINISHED') return;
     if (estado === 'ERROR' || estado === 'EXPIRED') throw new Error(`Instagram rechazó ${nombre}: ${status || estado}`);
-    await sleep(5000);
+    await sleep(pausa);
   }
   throw new Error(`${nombre} no terminó de procesarse a tiempo.`);
+}
+
+// ---------- reels ----------
+async function reelsPendientes() {
+  const dirs = (await readdir(POSTS_DIR, { withFileTypes: true }))
+    .filter((d) => d.isDirectory() && /^\d{4}-\d{2}-\d{2}-/.test(d.name))
+    .map((d) => d.name)
+    .sort();
+  const out = [];
+  for (const d of dirs) {
+    const full = path.join(POSTS_DIR, d);
+    if ((await existe(path.join(full, 'reel.mp4'))) && !(await existe(path.join(full, 'reel-publicado.json')))) out.push(d);
+  }
+  return out;
+}
+
+async function cargarReel(dir) {
+  const full = path.join(POSTS_DIR, dir);
+  const archivoTexto = (await existe(path.join(full, 'reel-caption.txt'))) ? 'reel-caption.txt' : 'caption.txt';
+  const caption = (await readFile(path.join(full, archivoTexto), 'utf8')).replace(/^﻿/, '').replace(/\r\n/g, '\n').trim();
+  if (!caption) fail(`${dir}: ${archivoTexto} está vacío.`);
+  if (caption.length > 2200) fail(`${dir}: el texto del reel tiene ${caption.length} caracteres (máximo 2200).`);
+  const url = (f) => `https://raw.githubusercontent.com/${REPO}/${SHA}/posts/${encodeURIComponent(dir)}/${f}`;
+  const portada = (await existe(path.join(full, 'reel-portada.jpg'))) ? url('reel-portada.jpg') : null;
+  return { dir, full, caption, video: url('reel.mp4'), portada };
+}
+
+async function verificarReel(reel) {
+  const r = await fetch(reel.video, { method: 'HEAD' });
+  if (!r.ok) fail(`No se puede descargar ${reel.video} (HTTP ${r.status}). ¿El repositorio es público?`);
+  if (reel.portada) {
+    const p = await fetch(reel.portada, { method: 'HEAD' });
+    if (!p.ok || !(p.headers.get('content-type') || '').startsWith('image/jpeg')) fail(`No se puede usar la portada ${reel.portada}.`);
+  }
+  console.log(`  ✓ el video se puede descargar (${Math.round(Number(r.headers.get('content-length') || 0) / 1024)} KB)`);
+}
+
+// Instagram descarga y procesa el video: puede tardar varios minutos.
+async function crearReel(igId, reel) {
+  const params = { media_type: 'REELS', video_url: reel.video, caption: reel.caption, share_to_feed: 'true' };
+  if (reel.portada) params.cover_url = reel.portada;
+  const { id } = await api('POST', `${igId}/media`, params);
+  await esperarContenedor(id, 'el reel', 60, 10000);
+  return id;
+}
+
+async function modoReel() {
+  const fecha = hoy();
+  const toca = (await reelsPendientes()).filter((d) => d.slice(0, 10) <= fecha);
+  if (!toca.length) {
+    console.log('Hoy no hay reel para publicar.'); // ni se conecta a Instagram
+    return;
+  }
+  const { igId, username } = await conectar();
+  if (username !== USUARIO_ESPERADO) fail(`El token es de @${username}, se esperaba @${USUARIO_ESPERADO}.`);
+  const reel = await cargarReel(toca[0]);
+  console.log(`Publicando el reel de ${reel.dir}`);
+  const registro = (id, permalink, timestamp) => writeFile(path.join(reel.full, 'reel-publicado.json'),
+    `${JSON.stringify({ id, permalink, timestamp: timestamp || new Date().toISOString() }, null, 2)}\n`);
+  const previo = await yaPublicado(igId, reel);
+  if (previo) {
+    console.log(`Ya estaba publicado (${previo.permalink}); solo lo marco como hecho.`);
+    await registro(previo.id, previo.permalink, previo.timestamp);
+    return;
+  }
+  await verificarReel(reel);
+  const contenedor = await crearReel(igId, reel);
+  const { id } = await api('POST', `${igId}/media_publish`, { creation_id: contenedor });
+  const { permalink, timestamp } = await api('GET', id, { fields: 'permalink,timestamp' });
+  console.log(`REEL PUBLICADO: ${permalink}`);
+  await registro(id, permalink, timestamp);
 }
 
 async function crearHistoria(igId, post) {
@@ -187,6 +261,7 @@ async function conectar() {
 
 async function main() {
   console.log(`Modo: ${MODO} · Fecha en Argentina: ${hoy()}`);
+  if (MODO === 'reel') return modoReel();
   const { igId, username } = await conectar();
   if (username !== USUARIO_ESPERADO) fail(`El token es de @${username}, se esperaba @${USUARIO_ESPERADO}.`);
   const cola = await pendientes();
@@ -207,6 +282,15 @@ async function main() {
       }
       console.log('PRUEBA OK: el token funciona e Instagram puede leer las imágenes. No se publicó nada.');
       console.log(`Cola pendiente: ${cola.join(', ')}`);
+    }
+    const reels = await reelsPendientes();
+    if (reels.length) {
+      const reel = await cargarReel(reels[0]);
+      console.log(`Probando el próximo reel: ${reel.dir}`);
+      await verificarReel(reel);
+      await crearReel(igId, reel);
+      console.log('  ✓ reel aceptado por Instagram (no se publicó)');
+      console.log(`Reels pendientes: ${reels.join(', ')}`);
     }
     await renovarToken();
     return;

@@ -2,14 +2,16 @@ name: Publicar en Instagram
 
 on:
   schedule:
-    # Todos los días a las 01:17 UTC = 22:17 en Argentina (19:17 en México, 20:17 en Colombia).
+    # Post del día: 01:17 UTC = 22:17 en Argentina (19:17 en México, 20:17 en Colombia).
     - cron: '17 1 * * *'
+    # Reel del día, si hay: 15:17 UTC = 12:17 en Argentina (9:17 en México, 10:17 en Colombia).
+    - cron: '17 15 * * *'
   workflow_dispatch:
     inputs:
       modo:
-        description: 'probar = valida token e imágenes sin publicar · publicar = publica el post que toca hoy'
+        description: 'probar = valida todo sin publicar · publicar = publica el post que toca hoy · reel = publica el reel que toca hoy'
         type: choice
-        options: [probar, publicar]
+        options: [probar, publicar, reel]
         default: probar
 
 permissions:
@@ -29,7 +31,7 @@ jobs:
       - name: Publicar
         env:
           IG_TOKEN: ${{ secrets.IG_TOKEN }}
-          MODO: ${{ github.event_name == 'schedule' && 'publicar' || inputs.modo }}
+          MODO: ${{ github.event_name == 'schedule' && (github.event.schedule == '17 15 * * *' && 'reel' || 'publicar') || inputs.modo }}
         run: |
           node --version
           node scripts/publicar.mjs
