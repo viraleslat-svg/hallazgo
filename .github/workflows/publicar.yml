@@ -6,6 +6,10 @@ on:
     - cron: '17 1 * * *'
     # Reel del día, si hay: 15:17 UTC = 12:17 en Argentina (9:17 en México, 10:17 en Colombia).
     - cron: '17 15 * * *'
+  # Si cambia el script o el workflow, corre solo una prueba (no publica nada).
+  push:
+    branches: [main]
+    paths: ['scripts/**', '.github/workflows/**']
   workflow_dispatch:
     inputs:
       modo:
@@ -31,7 +35,7 @@ jobs:
       - name: Publicar
         env:
           IG_TOKEN: ${{ secrets.IG_TOKEN }}
-          MODO: ${{ github.event_name == 'schedule' && (github.event.schedule == '17 15 * * *' && 'reel' || 'publicar') || inputs.modo }}
+          MODO: ${{ github.event_name == 'schedule' && (github.event.schedule == '17 15 * * *' && 'reel' || 'publicar') || inputs.modo || 'probar' }}
         run: |
           node --version
           node scripts/publicar.mjs

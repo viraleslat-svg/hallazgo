@@ -32,6 +32,8 @@ const POSTS_DIR = path.join(process.cwd(), 'posts');
 
 function fail(msg) {
   console.error(`ERROR: ${msg}`);
+  // Como anotación (::error::) el motivo se ve en la API pública de GitHub, sin iniciar sesión.
+  console.log(`::error::${String(msg).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A')}`);
   process.exit(1);
 }
 
