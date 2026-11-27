@@ -257,7 +257,11 @@ async function conectar() {
     console.log(`Cuenta conectada: @${cuenta.username} · API de Facebook (usuario del sistema)`);
     return { igId: cuenta.id, username: cuenta.username };
   } catch (e) {
-    fail(`El token no sirvió con ninguna de las dos APIs.\n  Instagram: ${errorIg}\n  Facebook: ${e.message}`);
+    // Pasó el 25/11/2026: Meta bloquea la cuenta de Facebook dueña de la app y se destraba confirmando ahí.
+    const pista = /API access blocked/i.test(e.message)
+      ? '\n  → Meta bloqueó la cuenta de desarrollador: entrar a developers.facebook.com con la cuenta de Facebook dueña de la app y confirmar lo que pida.'
+      : '';
+    fail(`El token no sirvió con ninguna de las dos APIs.\n  Instagram: ${errorIg}\n  Facebook: ${e.message}${pista}`);
   }
 }
 
